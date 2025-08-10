@@ -479,7 +479,7 @@ cowForm.addEventListener("submit", async (e) => {
   formData.append("file", photoBlob);
   formData.append("upload_preset", "cow_upload");
 
-  const cloudinaryRes = await fetch("https://api.cloudinary.com/v1_1/<YOUR_CLOUD_NAME>/image/upload", {
+  const cloudinaryRes = await fetch("https://api.cloudinary.com/v1_1/dd8dxlddu/image/upload", {
     method: "POST",
     body: formData
   });

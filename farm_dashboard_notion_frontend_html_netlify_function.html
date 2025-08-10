@@ -1,0 +1,468 @@
+<!--
+Farm Dashboard (Vanilla HTML + CSS + JS)
+Files included in this single document:
+
+1) index.html            -> the front-end (HTML, CSS, vanilla JS)
+2) netlify/functions/notion.js  -> a Netlify serverless function (Node) that proxies requests to Notion API
+3) README (below)       -> setup + deployment instructions (Netlify)
+
+IMPORTANT security note:
+- Do NOT place your Notion Integration Token directly into client-side code.
+- The included serverless function reads the token from environment variables (NOTION_TOKEN) and the database id (NOTION_DB_ID).
+- Deploy on Netlify (free). Add the env vars in Netlify site settings.
+
+-->
+<!--  
+
+========================================
+README
+========================================
+
+Overview
+--------
+This package is a small, secure front-end dashboard in plain HTML/CSS/vanilla JS that reads your Notion "cow database" by calling a serverless proxy. The proxy keeps your Notion integration token secret.
+
+What you get
+------------
+- An `index.html` (single file) that renders a responsive dashboard, table + simple chart, search and filters, and basic row detail modal.
+- A Netlify Function (`netlify/functions/notion.js`) that queries your Notion database and returns simplified JSON for the front-end.
+
+Why a serverless function?
+--------------------------
+Notion integration tokens are secrets. If you put them in client-side code, anyone can see them. The Netlify Function acts as a secure middleman.
+
+Requirements
+------------
+- A Notion Integration token (create in Notion Developers and add the integration to your cow database's Share list).
+- The Notion Database ID for your cows database.
+- A Netlify account (free). We'll deploy by connecting your GitHub repo.
+
+Environment variables to set on Netlify (Site settings -> Build & deploy -> Environment):
+- NOTION_TOKEN = <your internal integration token>
+- NOTION_DB_ID = <your database id (UUID)>  
+
+Deployment steps (short)
+------------------------
+1. Create a new GitHub repo and add the `index.html` and `netlify/functions/notion.js` files.
+2. Log into Netlify, create a new site from GitHub, choose the repo.
+3. In Netlify site settings, set the environment variables `NOTION_TOKEN` and `NOTION_DB_ID`.
+4. Deploy. Your front-end will be live at `https://<your-site>.netlify.app`.
+
+API endpoints exposed by the function
+------------------------------------
+GET /.netlify/functions/notion?op=list
+  - Returns an array of simplified cow objects.
+GET /.netlify/functions/notion?op=get&id=<page_id>
+  - Returns a single page's full simplified object.
+
+Customization
+-------------
+- If your Notion property names differ (e.g. "Tag" instead of "Tag Number"), edit the mapping in the front-end `mapNotionPage` function.
+
+========================================
+index.html
+========================================
+ -->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Farm Tracker — Cows</title>
+  <meta name="description" content="Simple farm dashboard: cows, production, and trends (Notion-backed)." />
+  <style>
+    /* Minimal modern CSS — responsive grid and clean table */
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#60a5fa; --glass: rgba(255,255,255,0.03);
+      --radius:12px; --maxw:1100px;
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%; margin:0; background:linear-gradient(180deg,#071022 0%, #071827 100%); color:#e6eef8}
+    .page{max-width:var(--maxw); margin:28px auto; padding:20px}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    .logo{width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#7c3aed);display:flex;align-items:center;justify-content:center;font-weight:700}
+    h1{font-size:20px;margin:0}
+    p.lead{margin:0;color:var(--muted);font-size:13px}
+
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+    .input{background:var(--card);border-radius:10px;padding:8px 12px;border:1px solid rgba(255,255,255,0.03);min-width:180px}
+    .btn{background:linear-gradient(90deg,var(--accent),#34d399);border:none;padding:8px 12px;border-radius:10px;cursor:pointer;font-weight:600}
+    .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+
+    .layout{display:grid;grid-template-columns:1fr 360px;gap:18px}
+    @media (max-width:900px){.layout{grid-template-columns:1fr} .right-col{order:2}}
+
+    .card{background:var(--card);padding:14px;border-radius:var(--radius);box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+    .table{width:100%;border-collapse:collapse;font-size:13px}
+    .table thead th{position:sticky;top:0;background:rgba(0,0,0,0.15);backdrop-filter:blur(2px);padding:10px;text-align:left;color:var(--muted);font-weight:600}
+    .table tbody tr{border-top:1px solid rgba(255,255,255,0.02)}
+    .table td{padding:10px;vertical-align:middle}
+
+    .muted{color:var(--muted);font-size:12px}
+    .pill{display:inline-block;padding:6px 8px;border-radius:999px;background:var(--glass);font-size:12px}
+
+    /* modal */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(2,6,23,0.6);display:none;align-items:center;justify-content:center}
+    .modal{width:min(760px,96%);background:#020617;padding:20px;border-radius:12px}
+
+    /* small chart placeholder */
+    .chart{height:160px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="logo">FD</div>
+      <div>
+        <h1>Farm Dashboard — Cows</h1>
+        <p class="lead">Live data from your Notion database (read-only). Use the Netlify function to keep your Notion token secret.</p>
+      </div>
+    </header>
+
+    <div class="controls">
+      <input class="input" id="search" placeholder="Search tag / type / notes..." />
+      <select id="filterType" class="input">
+        <option value="">All types</option>
+        <option value="Cow">Cow</option>
+        <option value="Heifer">Heifer</option>
+        <option value="Bull">Bull</option>
+      </select>
+      <button class="btn" id="refreshBtn">Refresh</button>
+      <button class="btn secondary" id="exportCsv">Export CSV</button>
+    </div>
+
+    <div class="layout">
+      <main>
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <strong>Herd</strong>
+            <div class="muted" id="summary">Loading...</div>
+          </div>
+
+          <div style="overflow:auto;max-height:560px">
+            <table class="table" aria-live="polite">
+              <thead>
+                <tr>
+                  <th>Tag</th>
+                  <th>Type</th>
+                  <th>Age</th>
+                  <th>Latest Milk (L)</th>
+                  <th>Last Prod</th>
+                  <th>Offspring</th>
+                </tr>
+              </thead>
+              <tbody id="tbody">
+                <!-- rows injected by JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <footer>
+          <div>Tip: To allow edits from the dashboard, implement a secure POST endpoint and add UI forms. Ask me and I'll add it.</div>
+        </footer>
+      </main>
+
+      <aside class="right-col">
+        <div class="card">
+          <strong>Production trend</strong>
+          <div class="chart" id="chart">(small sparkline)</div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <strong>Selected cow</strong>
+          <div id="selected">No cow selected. Click a row to view details.</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- modal -->
+  <div id="modal" class="modal-backdrop" role="dialog" aria-modal="true">
+    <div class="modal" role="document">
+      <button id="closeModal" class="btn secondary" style="float:right">Close</button>
+      <h3 id="modalTitle">Cow details</h3>
+      <pre id="modalBody" style="white-space:pre-wrap;margin-top:8px"></pre>
+    </div>
+  </div>
+  
+
+  <script>
+  // -------------------------
+  // Configuration
+  // -------------------------
+  // The front-end calls the Netlify function at /.netlify/functions/notion
+  const API_ROOT = '/.netlify/functions/notion';
+
+  // If you're testing locally, run Netlify dev or set a different root.
+  // -------------------------
+
+  // DOM refs
+  const tbody = document.getElementById('tbody');
+  const summary = document.getElementById('summary');
+  const searchInput = document.getElementById('search');
+  const filterType = document.getElementById('filterType');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const exportCsvBtn = document.getElementById('exportCsv');
+  const chart = document.getElementById('chart');
+  const selected = document.getElementById('selected');
+  const modal = document.getElementById('modal');
+  const closeModal = document.getElementById('closeModal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalBody = document.getElementById('modalBody');
+
+  let rawData = [];
+
+  // -------------------------
+  // Helpers
+  // -------------------------
+  function safeText(t){ return t === undefined || t === null ? '' : String(t); }
+
+  // Map Notion page object (from our function) into a simple shape the UI expects.
+  // Adjust property keys to match your DB property names.
+  function mapNotionPage(page){
+    // expected page.properties object with keys. Example mapping — change these names if your DB uses different property titles.
+    const p = page.properties || {};
+    return {
+      id: page.id,
+      tag: p['Tag']?.rich_text?.[0]?.plain_text || p['Tag Number']?.title?.[0]?.plain_text || p['Tag'] || '',
+      type: p['Type']?.select?.name || p['Breed']?.select?.name || p['Type'] || '',
+      age: p['Age']?.number || '',
+      latest_milk: p['Latest Milk (L)']?.number || p['Latest Milk']?.number || p['Milk (L)']?.number || '',
+      last_production: p['Last Production Date']?.date?.start || p['Last Production']?.date?.start || p['Last Prod']?.date?.start || '',
+      offspring: p['Offspring']?.rich_text?.[0]?.plain_text || p['Offspring Count']?.number || '',
+      notes: p['Notes']?.rich_text?.[0]?.plain_text || ''
+    };
+  }
+
+  function renderRows(data){
+    tbody.innerHTML = '';
+    if(!data.length){
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">No cows found</td></tr>';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    data.forEach(cow => {
+      const tr = document.createElement('tr');
+      tr.tabIndex = 0;
+      tr.style.cursor = 'pointer';
+      tr.addEventListener('click', ()=> showModal(cow));
+
+      tr.innerHTML = `
+        <td><strong>${safeText(cow.tag)}</strong></td>
+        <td><span class="pill">${safeText(cow.type)}</span></td>
+        <td>${safeText(cow.age)}</td>
+        <td>${safeText(cow.latest_milk)}</td>
+        <td>${safeText(cow.last_production)}</td>
+        <td>${safeText(cow.offspring)}</td>
+      `;
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+  }
+
+  function showModal(cow){
+    modalTitle.textContent = `Cow — ${cow.tag || cow.id}`;
+    modalBody.textContent = JSON.stringify(cow, null, 2);
+    modal.style.display = 'flex';
+  }
+  closeModal.addEventListener('click', ()=> modal.style.display = 'none');
+  modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.style.display = 'none'; });
+
+  function summaryText(data){
+    const total = data.length;
+    const avgMilk = (data.reduce((s,c)=>s + (Number(c.latest_milk)||0),0) / Math.max(1,total)).toFixed(1);
+    return `${total} animals • Avg latest milk ${avgMilk} L`;
+  }
+
+  function updateChart(data){
+    // super simple sparkline using SVG text
+    const values = data.map(d => Number(d.latest_milk)||0);
+    if(values.length === 0){ chart.textContent = '(no data)'; return; }
+    const w = 320, h = 100, max = Math.max(...values) || 1;
+    const points = values.map((v,i)=> `${(i/(values.length-1||1))*w},${h - (v/max)*h}`).join(' ');
+    chart.innerHTML = `<svg width="100%" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline fill="none" stroke="white" stroke-opacity="0.9" stroke-width="2" points="${points}"/></svg>`;
+  }
+
+  function downloadCSV(rows){
+    const header = ['Tag','Type','Age','Latest Milk','Last Production','Offspring','Notes'];
+    const csv = [header.join(',')].concat(rows.map(r=>[
+      `"${(r.tag||'').replace(/"/g,'""')}"`,
+      `"${(r.type||'').replace(/"/g,'""')}"`,
+      r.age, r.latest_milk, `"${(r.last_production||'')}"`, r.offspring, `"${(r.notes||'').replace(/"/g,'""')}"`
+    ].join(','))).join('\n');
+
+    const blob = new Blob([csv],{type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'cows.csv'; document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // -------------------------
+  // Fetching
+  // -------------------------
+  async function fetchList(){
+    try{
+      setLoading(true);
+      const url = API_ROOT + '?op=list';
+      const res = await fetch(url);
+      if(!res.ok) throw new Error('Failed to fetch');
+      const json = await res.json();
+      // map to UI shape
+      rawData = json.map(mapNotionPage);
+      renderRows(rawData);
+      summary.textContent = summaryText(rawData);
+      updateChart(rawData);
+    }catch(err){
+      console.error(err);
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">Unable to load data. Check server logs and environment variables.</td></tr>';
+      summary.textContent = 'Error';
+      chart.textContent = '(error)';
+    }finally{ setLoading(false); }
+  }
+
+  // -------------------------
+  // UI interactions
+  // -------------------------
+  function setLoading(is){
+    refreshBtn.disabled = is;
+    refreshBtn.textContent = is ? 'Loading…' : 'Refresh';
+  }
+
+  refreshBtn.addEventListener('click', ()=> fetchList());
+  exportCsvBtn.addEventListener('click', ()=> downloadCSV(rawData));
+
+  function applyFilters(){
+    const q = (searchInput.value||'').toLowerCase().trim();
+    const t = filterType.value;
+    const filtered = rawData.filter(r=>{
+      if(t && (r.type||'').toLowerCase() !== t.toLowerCase()) return false;
+      if(!q) return true;
+      return ((r.tag||'')+ ' ' + (r.type||'') + ' ' + (r.notes||'')).toLowerCase().includes(q);
+    });
+    renderRows(filtered);
+    summary.textContent = summaryText(filtered);
+    updateChart(filtered);
+  }
+
+  searchInput.addEventListener('input', debounce(applyFilters, 250));
+  filterType.addEventListener('change', applyFilters);
+
+  // tiny debounce
+  function debounce(fn,wait){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait); } }
+
+  // initial load
+  fetchList();
+
+  // -------------------------
+  // Utility: show full page details
+  // -------------------------
+  async function fetchPageDetails(id){
+    try{
+      const res = await fetch(API_ROOT + '?op=get&id=' + encodeURIComponent(id));
+      if(!res.ok) throw new Error('err');
+      const json = await res.json();
+      return mapNotionPage(json);
+    }catch(e){ console.error(e); return null; }
+  }
+
+  // update selected panel when clicking a row
+  function showSelected(cow){
+    selected.innerHTML = `<div style="margin-top:8px"><strong>${cow.tag}</strong><div class="muted">${cow.type}</div><div style="margin-top:8px">Latest milk: ${cow.latest_milk} L</div><div>Last: ${cow.last_production}</div></div>`;
+  }
+
+  // enhance: clicking a row opens modal and updates selected
+  // we already set row click to show modal; add listener to modal open to update selected
+  const origShowModal = showModal;
+  showModal = function(cow){ origShowModal(cow); showSelected(cow); }
+
+  </script>
+</body>
+</html>
+
+<!-- 
+========================================
+netlify/functions/notion.js
+========================================
+
+// Netlify Function to proxy requests to Notion API
+// Save this file to: netlify/functions/notion.js
+
+/*
+Environment variables required (set in Netlify site settings):
+- NOTION_TOKEN  (your Notion internal integration token)
+- NOTION_DB_ID  (the database id, e.g. a UUID)
+
+This function supports:
+- GET ?op=list  -> queries the database and returns an array of page objects (raw Notion page objects)
+- GET ?op=get&id=PAGE_ID -> retrieves a page by id
+
+It intentionally returns Notion's page objects (lightweight) so the front-end can map properties.
+*/
+
+const fetch = require('node-fetch');
+
+exports.handler = async function(event, context){
+  const NOTION_TOKEN = process.env.NOTION_TOKEN;
+  const NOTION_DB_ID = process.env.NOTION_DB_ID;
+
+  if(!NOTION_TOKEN || !NOTION_DB_ID){
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' , 'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Methods':'GET,OPTIONS'},
+      body: JSON.stringify({ error: 'NOTION_TOKEN and NOTION_DB_ID must be set in environment variables' })
+    };
+  }
+
+  const qs = event.queryStringParameters || {};
+  const op = qs.op || 'list';
+
+  try{
+    if(op === 'list'){
+      // Query the database (no filters) — paginated
+      const url = `https://api.notion.com/v1/databases/${NOTION_DB_ID}/query`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${NOTION_TOKEN}`,
+          'Notion-Version': '2022-06-28',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ page_size: 100 })
+      });
+      if(!res.ok){
+        const text = await res.text();
+        return { statusCode: 502, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: 'Notion API error', details: text }) };
+      }
+      const json = await res.json();
+      // return results array
+      return { statusCode: 200, headers:{ 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' }, body: JSON.stringify(json.results) };
+    }
+    else if(op === 'get'){
+      const id = qs.id;
+      if(!id) return { statusCode:400, headers:{'Access-Control-Allow-Origin':'*'}, body: 'Missing id' };
+      const url = `https://api.notion.com/v1/pages/${id}`;
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28' } });
+      if(!res.ok) return { statusCode:502, headers:{'Access-Control-Allow-Origin':'*'}, body: 'Notion error' };
+      const json = await res.json();
+      return { statusCode:200, headers:{ 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' }, body: JSON.stringify(json) };
+    }
+    else{
+      return { statusCode:400, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: 'Unknown op' }) };
+    }
+  }catch(err){
+    console.error('Function error', err);
+    return { statusCode:500, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: String(err) }) };
+  }
+};
+
+
+========================================
+END OF FILE
+========================================
+ -->

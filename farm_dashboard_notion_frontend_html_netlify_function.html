@@ -174,24 +174,43 @@ index.html
           <strong>Production trend</strong>
           <div class="chart" id="chart">(small sparkline)</div>
         </div>
-        <button id="addCowBtn" class="btn-primary">Add Cow</button>
+       <!-- Add Cow Button -->
+<button id="addCowBtn" class="btn-primary">Add Cow</button>
 
-        <div id="addCowModal" class="modal hidden">
-          <div class="modal-content">
-            <button id="closeModal" class="close-btn">×</button>
-            <video id="cameraStream" autoplay playsinline></video>
-            <button id="takePhoto" class="btn-secondary">Take Photo</button>
-            <canvas id="photoCanvas" class="hidden"></canvas>
-            
-            <form id="cowForm">
-              <input name="name" placeholder="Name" required>
-              <input name="age" type="number" placeholder="Age" required>
-              <input name="breed" placeholder="Breed" required>
-              <input name="milk" type="number" step="0.1" placeholder="Milk Production (L/day)" required>
-              <button type="submit" class="btn-primary">Finish & Add Another</button>
-            </form>
-          </div>
-        </div>
+<!-- Add Cow Modal -->
+<div id="addCowModal" class="modal hidden">
+  <div class="modal-header">
+    <button id="closeModalBtn" class="btn-close">✕</button>
+    <h2>Add Cow</h2>
+  </div>
+
+  <!-- Camera Container -->
+  <div id="cameraContainer">
+    <video id="camera" autoplay playsinline></video>
+    <button id="takePhotoBtn" class="btn-primary">Take Photo</button>
+  </div>
+
+  <!-- Form Container (hidden until photo taken) -->
+  <form id="cowForm" class="hidden">
+    <img id="photoPreview" alt="Cow photo preview"/>
+    
+    <label>
+      Name:
+      <input type="text" id="cowName" required>
+    </label>
+    <label>
+      Breed:
+      <input type="text" id="cowBreed" required>
+    </label>
+    <label>
+      Age:
+      <input type="number" id="cowAge" required>
+    </label>
+
+    <button type="submit" class="btn-primary">Finish</button>
+  </form>
+</div>
+
 
 
         <div class="card" style="margin-top:12px">
@@ -403,79 +422,105 @@ index.html
 
   </script>
   <script>
-    const addCowBtn = document.getElementById('addCowBtn');
-    const cameraStream = document.getElementById('cameraStream');
-    const takePhotoBtn = document.getElementById('takePhoto');
-    const photoCanvas = document.getElementById('photoCanvas');
-    const cowForm = document.getElementById('cowForm');
-    
-    let photoBlobUrl = "";
-    
-    addCowBtn.onclick = async () => {
-      modal.classList.remove('hidden');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      cameraStream.srcObject = stream;
-    };
-    
-    closeModal.onclick = () => {
-      modal.classList.add('hidden');
-      const stream = cameraStream.srcObject;
-      if (stream) stream.getTracks().forEach(track => track.stop());
-    };
-    
-    takePhotoBtn.onclick = () => {
-      const ctx = photoCanvas.getContext('2d');
-      photoCanvas.width = cameraStream.videoWidth;
-      photoCanvas.height = cameraStream.videoHeight;
-      ctx.drawImage(cameraStream, 0, 0);
-      photoCanvas.classList.remove('hidden');
-      photoCanvas.toBlob(blob => {
-        photoBlobUrl = URL.createObjectURL(blob);
-      }, 'image/jpeg');
-    };
-    
-    async function uploadToCloudinary(blob) {
-      const formData = new FormData();
-      formData.append('file', blob);
-      formData.append('upload_preset', 'cow_upload'); // Your unsigned preset
-    
-      const res = await fetch('https://api.cloudinary.com/v1_1/YOUR_CLOUD_NAME/image/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      return data.secure_url;
-    }
-    
-    cowForm.onsubmit = async (e) => {
-      e.preventDefault();
-      const formData = new FormData(cowForm);
-    
-      let cloudinaryUrl = "";
-      if (photoCanvas.width > 0) {
-        const blob = await new Promise(resolve => photoCanvas.toBlob(resolve, 'image/jpeg'));
-        cloudinaryUrl = await uploadToCloudinary(blob);
-      }
-    
-      const cowData = {
-        name: formData.get('name'),
-        age: Number(formData.get('age')),
-        breed: formData.get('breed'),
-        milk: Number(formData.get('milk')),
-        photoUrl: cloudinaryUrl
-      };
-    
-      await fetch('/.netlify/functions/notion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cowData)
-      });
-    
-      cowForm.reset();
-      photoCanvas.classList.add('hidden');
-      alert('Cow added!');
-    };
-    </script>
+    const addCowBtn = document.getElementById("addCowBtn");
+const addCowModal = document.getElementById("addCowModal");
+const closeModalBtn = document.getElementById("closeModalBtn");
+
+const cameraContainer = document.getElementById("cameraContainer");
+const video = document.getElementById("camera");
+const takePhotoBtn = document.getElementById("takePhotoBtn");
+
+const cowForm = document.getElementById("cowForm");
+const photoPreview = document.getElementById("photoPreview");
+
+let photoBlob = null;
+let stream = null;
+
+// Open Modal & Start Camera
+addCowBtn.addEventListener("click", async () => {
+  addCowModal.classList.remove("hidden");
+  cameraContainer.classList.remove("hidden");
+  cowForm.classList.add("hidden");
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    video.srcObject = stream;
+  } catch (err) {
+    alert("Camera access denied.");
+  }
+});
+
+// Take Photo
+takePhotoBtn.addEventListener("click", () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0);
+  canvas.toBlob(blob => {
+    photoBlob = blob;
+    photoPreview.src = URL.createObjectURL(blob);
+    cameraContainer.classList.add("hidden");
+    cowForm.classList.remove("hidden");
+    stopCamera();
+  }, "image/jpeg");
+});
+
+// Submit Cow Data
+cowForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  if (!photoBlob) {
+    alert("Please take a photo first.");
+    return;
+  }
+
+  // 1. Upload to Cloudinary
+  const formData = new FormData();
+  formData.append("file", photoBlob);
+  formData.append("upload_preset", "cow_upload");
+
+  const cloudinaryRes = await fetch("https://api.cloudinary.com/v1_1/<YOUR_CLOUD_NAME>/image/upload", {
+    method: "POST",
+    body: formData
+  });
+  const cloudinaryData = await cloudinaryRes.json();
+  const imageUrl = cloudinaryData.secure_url;
+
+  // 2. Send data to Netlify function to store in Notion
+  const cowData = {
+    name: document.getElementById("cowName").value,
+    breed: document.getElementById("cowBreed").value,
+    age: document.getElementById("cowAge").value,
+    photo: imageUrl
+  };
+
+  await fetch("/.netlify/functions/addCow", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cowData)
+  });
+
+  // Reset for next cow
+  cowForm.reset();
+  photoBlob = null;
+  addCowBtn.click(); // reopen camera for next
+});
+
+// Close Modal
+closeModalBtn.addEventListener("click", () => {
+  addCowModal.classList.add("hidden");
+  stopCamera();
+});
+
+// Stop Camera Stream
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+    stream = null;
+  }
+}
+
+  </script>
 </body>
 </html>
 

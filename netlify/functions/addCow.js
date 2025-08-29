@@ -56,6 +56,7 @@ if (richImageKey) {
   
   // Create the page
   const createRes = await notion.pages.create({ parent: { database_id: NOTION_DATABASE_ID }, properties });
+  console.log("Notion response:", createRes);
   
   
   // Instead of returning the entire Notion response (which can contain circular or complex structures),
@@ -73,6 +74,7 @@ if (richImageKey) {
   return {try: { statusCode: 201, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, notionPage: pageInfo }) },
    catch (err) {
   // Helpful server-side logging for Netlify function logs
+  console.error("Notion error:", err.body || err.message || err);
   console.error('Error in addCow function:', err);
   const detail = err && err.message ? err.message : String(err);
   return { statusCode: 500, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Server error', detail }) };

@@ -26,72 +26,124 @@ body {
   }
   
   /* Modal Styles */
-  .modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.85);
-    color: white;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 16px;
-  }
-  
-  .modal-header {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  
-  /* Camera Styles */
-  #cameraContainer {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  
-  video {
-    width: 100%;
-    max-width: 500px;
-    border-radius: 8px;
-  }
-  
-  #photoPreview {
-    width: 60%;
-    max-width: 500px;
-    border-radius: 8px;
-    margin: 0 auto 12px;
-  }
-  
-  /* Form Styles */
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    width: 100%;
-    max-width: 500px;
-  }
-  
-  label {
-    display: flex;
-    flex-direction: column;
-    font-size: 0.9rem;
-  }
-  
-  input {
-    padding: 8px;
-    border-radius: 6px;
-    border: none;
-  }
+  /* Utility to actually hide elements your JS toggles */
+.hidden { display: none !important; }
+
+/* Style the external Add Cow trigger button that uses btn-primary */
+.btn-primary{
+  background: linear-gradient(90deg, var(--accent), #34d399);
+  color: #fff;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-primary:hover{ filter: brightness(0.95); }
+
+/* Single Add Cow Modal as a full-screen overlay */
+#cowModal{
+  position: fixed;
+  inset: 0;
+  background: rgba(2,6,23,0.75);
+  display: flex;                 /* shown when .hidden is removed */
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+/* The card inside the overlay */
+#cowModal .modal-card{
+  width: min(560px, 94%);
+  background: #020617;           /* matches your dark theme */
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  padding: 16px;
+  max-height: 90vh;
+  overflow-y: auto;              /* form always accessible */
+}
+
+/* Header */
+#cowModal .modal-header{
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+#cowModal .btn-close{
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #e6eef8;
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+#cowModal .btn-close:hover{ background: rgba(255,255,255,0.06); }
+
+/* Camera section: compact and centered */
+#cameraContainer{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+#camera{
+  width: 100%;
+  max-width: 420px;
+  height: 240px;
+  background: #000;             /* so it doesn’t look “empty” before stream */
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#takePhotoBtn{ align-self: center; }
+
+/* Form section: tidy layout, inputs match your style */
+#cowForm{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#cowForm label{
+  font-size: 0.9rem;
+  color: #e6eef8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#cowForm input{
+  background: var(--card);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #e6eef8;
+  padding: 10px;
+}
+
+/* Preview image: smaller than camera and centered */
+#photoPreview{
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  margin: 0 auto 4px;           /* center it, small gap below */
+}
+
+/* Small screens */
+@media (max-width: 480px){
+  #camera{ max-width: 100%; height: 200px; }
+  #photoPreview{ max-width: 180px; height: 130px; }
+}
+
   
   /* Responsive */
   @media (max-width: 600px) {
     .modal {
       padding: 8px;
+    }
+    #photoPreview {
+      width: 20%;
     }
   }
   .hidden {

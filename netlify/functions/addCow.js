@@ -1,28 +1,81 @@
-export async function handler(event) {
-    try {
-      const { name, breed, age, photo } = JSON.parse(event.body);
-  
-      const notionRes = await fetch(`https://api.notion.com/v1/pages`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.NOTION_TOKEN}`,
-          "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28"
-        },
-        body: JSON.stringify({
-          parent: { database_id: process.env.NOTION_DB_ID },
-          properties: {
-            Name: { title: [{ text: { content: name } }] },
-            Breed: { rich_text: [{ text: { content: breed } }] },
-            Age: { number: parseInt(age) },
-            Photo: { files: [{ name: "Cow Photo", external: { url: photo } }] }
-          }
-        })
-      });
-  
-      return { statusCode: 200, body: JSON.stringify({ success: true }) };
-    } catch (err) {
-      return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
-    }
+
+
+
+
+if (richImageKey) {
+  properties[richImageKey] = { rich_text: [{ type: 'text', text: { content: `images-base64: ${meta}` } }] };
+  } else if (notesRichKey) {
+  properties[notesRichKey] = { rich_text: [{ type: 'text', text: { content: `images-base64: ${meta}` } }] };
   }
+  
+  
+  
+  // Children relation: try to resolve to notion page ids
+  const relations = [];
+  if (children && Array.isArray(children) && children.length > 0 && childrenKey) {
+  for (const c of children) {
+  try {
+  if (looksLikeNotionId(c)) {
+  relations.push({ id: c });
+  continue;
+  }
+  
+  
+  // Otherwise assume c is a tag/title to search for
+  const filter = {
+  property: titleKey,
+  title: { equals: String(c) }
+  };
+  
+  
+  const qRes = await notion.databases.query({ database_id: NOTION_DATABASE_ID, filter, page_size: 1 });
+  if (qRes.results && qRes.results.length > 0) {
+  relations.push({ id: qRes.results[0].id });
+  } else {
+  // not found: skip. (Alternatively we could create a page for the child if desired.)
+  console.warn(`Child not found in Notion DB for title: ${c}`);
+  }
+  } catch (innerErr) {
+  console.error('Error resolving child', c, innerErr.message || innerErr);
+  }
+  }
+  
+  
+  if (relations.length > 0) {
+  properties[childrenKey] = { relation: relations };
+  }
+  }
+  
+  
+  // If owner was not mapped earlier to a property but owner exists, append to notes
+  if (!ownerKey && owner) {
+  const txt = `Owner: ${owner}`;
+  if (notesRichKey) properties[notesRichKey] = { rich_text: [{ type: 'text', text: { content: txt } }] };
+  }
+  
+  
+  // Create the page
+  const createRes = await notion.pages.create({ parent: { database_id: NOTION_DATABASE_ID }, properties });
+  
+  
+  // Instead of returning the entire Notion response (which can contain circular or complex structures),
+  // return a small, safe object with the page id and a readable title. Log full response server-side if needed.
+  const pageInfo = { id: createRes.id };
+  const titleText = extractTitleFromPage(createRes, titleKey);
+  if (titleText) pageInfo.title = titleText;
+  if (createRes.url) pageInfo.url = createRes.url;
+  
+  
+  // Log the full createRes for debugging in server logs (do not expose to client)
+  console.log('Notion page created:', createRes.id);
+  
+  
+  return {try: { statusCode: 201, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, notionPage: pageInfo }) },
+   catch (err) {
+  // Helpful server-side logging for Netlify function logs
+  console.error('Error in addCow function:', err);
+  const detail = err && err.message ? err.message : String(err);
+  return { statusCode: 500, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Server error', detail }) };
+  }
+  };
   

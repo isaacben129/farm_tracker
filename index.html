@@ -175,43 +175,66 @@ index.html
           <div class="chart" id="chart">(small sparkline)</div>
         </div>
        <!-- Add Cow Button -->
+<!-- Add Cow trigger -->
 <button id="addCowBtn" class="btn-primary">Add Cow</button>
 
-<!-- Add Cow Modal -->
-<div id="addCowModal" class="modal hidden">
-  <div class="modal-header">
-    <button id="closeModalBtn" class="btn-close">✕</button>
-    <h2>Add Cow</h2>
+<!-- Single Modal (overlay hidden by default) -->
+
+<div id="cowModal" class="modal-backdrop hidden" aria-hidden="true" role="dialog" aria-modal="true">
+  <div class="modal-card" role="document">
+
+    <div class="modal-header">
+      <h3>Add Cow</h3>
+      <button id="closeModalBtn" class="btn-close" aria-label="Close">✕</button>
+    </div>
+
+    <!-- Camera area: only one of <video> or <img> is visible at a time -->
+    <div id="cameraArea">
+      <video id="cameraStream" autoplay playsinline></video>
+      <img id="photoPreview" alt="Photo preview" class="hidden"/>
+    </div>
+
+    <div class="camera-controls">
+      <button id="takePhotoBtn" class="btn-primary">Take photo</button>
+      <button id="retakeBtn" class="btn-secondary hidden">Retake</button>
+      <span id="modalStatus" class="muted" aria-live="polite"></span>
+    </div>
+
+    <!-- Form -->
+    <form id="cowForm" class="cow-form">
+      <label>Tag number
+        <input id="tagInput" name="tag" type="text" required autocomplete="off"/>
+      </label>
+
+      <label>Gender
+        <select id="genderInput" name="gender">
+          <option value="">Select</option>
+          <option value="Female">Female</option>
+          <option value="Male">Male</option>
+          <option value="Unknown">Unknown</option>
+        </select>
+      </label>
+
+      <label>Owner
+        <input id="ownerInput" name="owner" type="text" autocomplete="off"/>
+      </label>
+
+      <label>Children (comma-separated IDs)
+        <input id="childrenInput" name="children" type="text" placeholder="E.g. COW-12, COW-13"/>
+      </label>
+
+      <label>Parent (ID)
+        <input id="parentInput" name="parent" type="text" placeholder="E.g. COW-01"/>
+      </label>
+
+      <div class="form-actions">
+        <button type="button" id="cancelBtn" class="btn-secondary">Close</button>
+        <button type="submit" id="submitBtn" class="btn-primary">Finish & Add Another</button>
+      </div>
+    </form>
+
   </div>
-
-  <!-- Camera Container -->
-  <div id="cameraContainer">
-    <video id="camera" autoplay playsinline></video>
-    <button id="takePhotoBtn" class="btn-primary">Take Photo</button>
-  </div>
-
-  <!-- Form Container (hidden until photo taken) -->
-  <form id="cowForm" class="hidden">
-    <img id="photoPreview" alt="Cow photo preview"/>
-    
-    <label>
-      Name:
-      <input type="text" id="cowName" required>
-    </label>
-    <label>
-      Breed:
-      <input type="text" id="cowBreed" required>
-    </label>
-    <label>
-      Age:
-      <input type="number" id="cowAge" required>
-    </label>
-
-    <button type="submit" class="btn-primary">Finish</button>
-  </form>
 </div>
-
-
 
         <div class="card" style="margin-top:12px">
           <strong>Selected cow</strong>
@@ -220,388 +243,220 @@ index.html
       </aside>
     </div>
   </div>
-
-  <!-- modal -->
-  <div id="modal" class="modal-backdrop" role="dialog" aria-modal="true">
-    <div class="modal" role="document">
-      <button id="closeModal" class="btn secondary" style="float:right">Close</button>
-      <h3 id="modalTitle">Cow details</h3>
-      <pre id="modalBody" style="white-space:pre-wrap;margin-top:8px"></pre>
-    </div>
-  </div>
-  
-
   <script>
-  // -------------------------
-  // Configuration
-  // -------------------------
-  // The front-end calls the Netlify function at /.netlify/functions/notion
-  const API_ROOT = '/.netlify/functions/notion';
+    /* Modal + camera logic: clean, robust, minimal dependencies.
+   Drop into the bottom of your page (after the modal HTML). */
 
-  // If you're testing locally, run Netlify dev or set a different root.
-  // -------------------------
+(() => {
+  // Elements
+  const addCowBtn = document.getElementById('addCowBtn');
+  const cowModal = document.getElementById('cowModal');
+  const closeModalBtn = document.getElementById('closeModalBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
 
-  // DOM refs
-  const tbody = document.getElementById('tbody');
-  const summary = document.getElementById('summary');
-  const searchInput = document.getElementById('search');
-  const filterType = document.getElementById('filterType');
-  const refreshBtn = document.getElementById('refreshBtn');
-  const exportCsvBtn = document.getElementById('exportCsv');
-  const chart = document.getElementById('chart');
-  const selected = document.getElementById('selected');
-  const modal = document.getElementById('modal');
-  const closeModal = document.getElementById('closeModal');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalBody = document.getElementById('modalBody');
+  const cameraStreamEl = document.getElementById('cameraStream');
+  const photoPreviewEl = document.getElementById('photoPreview');
+  const takePhotoBtn = document.getElementById('takePhotoBtn');
+  const retakeBtn = document.getElementById('retakeBtn');
+  const modalStatus = document.getElementById('modalStatus');
 
-  let rawData = [];
+  const cowForm = document.getElementById('cowForm');
+  const tagInput = document.getElementById('tagInput');
+  const genderInput = document.getElementById('genderInput');
+  const ownerInput = document.getElementById('ownerInput');
+  const childrenInput = document.getElementById('childrenInput');
+  const parentInput = document.getElementById('parentInput');
 
-  // -------------------------
+  // State
+  let stream = null;
+  let photoBlob = null;
+
   // Helpers
-  // -------------------------
-  function safeText(t){ return t === undefined || t === null ? '' : String(t); }
-
-  // Map Notion page object (from our function) into a simple shape the UI expects.
-  // Adjust property keys to match your DB property names.
-  function mapNotionPage(page){
-    // expected page.properties object with keys. Example mapping — change these names if your DB uses different property titles.
-    const p = page.properties || {};
-    return {
-      id: page.id,
-      tag: p['Tag']?.rich_text?.[0]?.plain_text || p['Tag Number']?.title?.[0]?.plain_text || p['Tag'] || '',
-      type: p['Type']?.select?.name || p['Breed']?.select?.name || p['Type'] || '',
-      age: p['Age']?.number || '',
-      latest_milk: p['Latest Milk (L)']?.number || p['Latest Milk']?.number || p['Milk (L)']?.number || '',
-      last_production: p['Last Production Date']?.date?.start || p['Last Production']?.date?.start || p['Last Prod']?.date?.start || '',
-      offspring: p['Offspring']?.rich_text?.[0]?.plain_text || p['Offspring Count']?.number || '',
-      notes: p['Notes']?.rich_text?.[0]?.plain_text || ''
-    };
+  function setStatus(msg, isError = false) {
+    modalStatus.textContent = msg || '';
+    modalStatus.style.color = isError ? '#fb7185' : '';
   }
 
-  function renderRows(data){
-    tbody.innerHTML = '';
-    if(!data.length){
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">No cows found</td></tr>';
+  function showModal() {
+    cowModal.classList.remove('hidden');
+    cowModal.setAttribute('aria-hidden', 'false');
+    resetForNewEntry();          // ensure camera ready
+    startCamera();
+  }
+
+  function hideModal() {
+    cowModal.classList.add('hidden');
+    cowModal.setAttribute('aria-hidden', 'true');
+    stopCamera();
+    resetAll();
+  }
+
+  // Camera control
+  async function startCamera() {
+    setStatus('Starting camera...');
+    try {
+      // prefer environment (rear) camera on mobile
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      cameraStreamEl.srcObject = stream;
+      await cameraStreamEl.play().catch(()=>{}); // ignore play promise
+      setStatus('');
+      // make sure preview is hidden
+      photoPreviewEl.classList.add('hidden');
+      cameraStreamEl.classList.remove('hidden');
+      takePhotoBtn.classList.remove('hidden');
+      retakeBtn.classList.add('hidden');
+    } catch (err) {
+      console.error('Camera error', err);
+      setStatus('Camera unavailable', true);
+    }
+  }
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    try { cameraStreamEl.srcObject = null; } catch(e) {}
+  }
+
+  // Take a photo and show preview (replace camera)
+  function takePhoto() {
+    if (!cameraStreamEl || !cameraStreamEl.videoWidth) {
+      setStatus('Camera not ready', true);
       return;
     }
-    const frag = document.createDocumentFragment();
-    data.forEach(cow => {
-      const tr = document.createElement('tr');
-      tr.tabIndex = 0;
-      tr.style.cursor = 'pointer';
-      tr.addEventListener('click', ()=> showModal(cow));
+    const w = cameraStreamEl.videoWidth || 1280;
+    const h = cameraStreamEl.videoHeight || 720;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(cameraStreamEl, 0, 0, w, h);
 
-      tr.innerHTML = `
-        <td><strong>${safeText(cow.tag)}</strong></td>
-        <td><span class="pill">${safeText(cow.type)}</span></td>
-        <td>${safeText(cow.age)}</td>
-        <td>${safeText(cow.latest_milk)}</td>
-        <td>${safeText(cow.last_production)}</td>
-        <td>${safeText(cow.offspring)}</td>
-      `;
-      frag.appendChild(tr);
-    });
-    tbody.appendChild(frag);
+    canvas.toBlob(blob => {
+      photoBlob = blob;
+      // show preview smaller, replace camera
+      photoPreviewEl.src = URL.createObjectURL(blob);
+      photoPreviewEl.classList.remove('hidden');
+      cameraStreamEl.classList.add('hidden');
+
+      takePhotoBtn.classList.add('hidden');
+      retakeBtn.classList.remove('hidden');
+
+      // stop camera to free resources
+      stopCamera();
+      setStatus('');
+    }, 'image/jpeg', 0.85);
   }
 
-  function showModal(cow){
-    modalTitle.textContent = `Cow — ${cow.tag || cow.id}`;
-    modalBody.textContent = JSON.stringify(cow, null, 2);
-    modal.style.display = 'flex';
-  }
-  closeModal.addEventListener('click', ()=> modal.style.display = 'none');
-  modal.addEventListener('click', (e)=>{ if(e.target === modal) modal.style.display = 'none'; });
-
-  function summaryText(data){
-    const total = data.length;
-    const avgMilk = (data.reduce((s,c)=>s + (Number(c.latest_milk)||0),0) / Math.max(1,total)).toFixed(1);
-    return `${total} animals • Avg latest milk ${avgMilk} L`;
-  }
-
-  function updateChart(data){
-    // super simple sparkline using SVG text
-    const values = data.map(d => Number(d.latest_milk)||0);
-    if(values.length === 0){ chart.textContent = '(no data)'; return; }
-    const w = 320, h = 100, max = Math.max(...values) || 1;
-    const points = values.map((v,i)=> `${(i/(values.length-1||1))*w},${h - (v/max)*h}`).join(' ');
-    chart.innerHTML = `<svg width="100%" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline fill="none" stroke="white" stroke-opacity="0.9" stroke-width="2" points="${points}"/></svg>`;
+  function retake() {
+    // discard previous blob & restart camera
+    if (photoPreviewEl.src) {
+      URL.revokeObjectURL(photoPreviewEl.src);
+      photoPreviewEl.src = '';
+    }
+    photoBlob = null;
+    photoPreviewEl.classList.add('hidden');
+    cameraStreamEl.classList.remove('hidden');
+    takePhotoBtn.classList.remove('hidden');
+    retakeBtn.classList.add('hidden');
+    setStatus('');
+    startCamera();
   }
 
-  function downloadCSV(rows){
-    const header = ['Tag','Type','Age','Latest Milk','Last Production','Offspring','Notes'];
-    const csv = [header.join(',')].concat(rows.map(r=>[
-      `"${(r.tag||'').replace(/"/g,'""')}"`,
-      `"${(r.type||'').replace(/"/g,'""')}"`,
-      r.age, r.latest_milk, `"${(r.last_production||'')}"`, r.offspring, `"${(r.notes||'').replace(/"/g,'""')}"`
-    ].join(','))).join('\n');
-
-    const blob = new Blob([csv],{type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'cows.csv'; document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+  // Reset UI for the next cow (keeps modal open)
+  function resetForNewEntry() {
+    cowForm.reset();
+    if (photoPreviewEl.src) { URL.revokeObjectURL(photoPreviewEl.src); photoPreviewEl.src = ''; }
+    photoBlob = null;
+    photoPreviewEl.classList.add('hidden');
+    cameraStreamEl.classList.remove('hidden');
+    takePhotoBtn.classList.remove('hidden');
+    retakeBtn.classList.add('hidden');
+    setStatus('');
   }
 
-  // -------------------------
-  // Fetching
-  // -------------------------
-  async function fetchList(){
-    try{
-      setLoading(true);
-      const url = API_ROOT + '?op=list';
-      const res = await fetch(url);
-      if(!res.ok) throw new Error('Failed to fetch');
-      const json = await res.json();
-      // map to UI shape
-      rawData = json.map(mapNotionPage);
-      renderRows(rawData);
-      summary.textContent = summaryText(rawData);
-      updateChart(rawData);
-    }catch(err){
-      console.error(err);
-      tbody.innerHTML = '<tr><td colspan="6" class="muted">Unable to load data. Check server logs and environment variables.</td></tr>';
-      summary.textContent = 'Error';
-      chart.textContent = '(error)';
-    }finally{ setLoading(false); }
+  // Full reset when closing modal
+  function resetAll(){
+    resetForNewEntry();
+    setStatus('');
   }
 
-  // -------------------------
-  // UI interactions
-  // -------------------------
-  function setLoading(is){
-    refreshBtn.disabled = is;
-    refreshBtn.textContent = is ? 'Loading…' : 'Refresh';
+  // Submit handler: prepares payload. Backend call is optional — currently a placeholder.
+  async function handleSubmit(e) {
+    e.preventDefault();
+
+    // basic validation
+    const tag = tagInput.value.trim();
+    if (!tag) { setStatus('Tag number required', true); return; }
+    if (!photoBlob) { setStatus('Please take a photo', true); return; }
+
+    const payload = {
+      tag,
+      gender: genderInput.value,
+      owner: ownerInput.value,
+      children: childrenInput.value,
+      parent: parentInput.value,
+      // photo will be sent as a Blob in FormData below
+    };
+
+    setStatus('Saving...');
+
+    // Example: send as FormData to your backend endpoint (if you have one).
+    // If you don't have a backend yet, the code below will simply log the payload and reset UI.
+    try {
+      // If you have a Netlify function endpoint (addCow), uncomment this block and adjust URL.
+      // /*
+      const form = document.querySelector('#addCowForm');
+      form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const tag = document.querySelector('#tagInput').value;
+      const owner = document.querySelector('#ownerInput').value;
+      const notes = document.querySelector('#notesInput').value;
+      const file = document.querySelector('#imageInput').files[0];
+      
+      
+      await submitCow({ tag, owner, file });
+      });
+
+      // --- FRONTEND-ONLY fallback: (no backend) ---
+      console.log('Cow save payload (frontend only):', payload);
+      console.log('Photo blob:', photoBlob);
+      await new Promise(r => setTimeout(r, 350)); // small delay for UX
+
+      // On success: reset form and keep modal open for next cow
+      setStatus('Saved ✓');
+      resetForNewEntry();
+      // restart camera so user can take next photo
+      startCamera();
+
+    } catch (err) {
+      console.error('Save error', err);
+      setStatus('Save failed', true);
+    }
   }
 
-  refreshBtn.addEventListener('click', ()=> fetchList());
-  exportCsvBtn.addEventListener('click', ()=> downloadCSV(rawData));
+  // Event wiring
+  addCowBtn?.addEventListener('click', showModal);
+  closeModalBtn?.addEventListener('click', hideModal);
+  cancelBtn?.addEventListener('click', hideModal);
 
-  function applyFilters(){
-    const q = (searchInput.value||'').toLowerCase().trim();
-    const t = filterType.value;
-    const filtered = rawData.filter(r=>{
-      if(t && (r.type||'').toLowerCase() !== t.toLowerCase()) return false;
-      if(!q) return true;
-      return ((r.tag||'')+ ' ' + (r.type||'') + ' ' + (r.notes||'')).toLowerCase().includes(q);
-    });
-    renderRows(filtered);
-    summary.textContent = summaryText(filtered);
-    updateChart(filtered);
-  }
-
-  searchInput.addEventListener('input', debounce(applyFilters, 250));
-  filterType.addEventListener('change', applyFilters);
-
-  // tiny debounce
-  function debounce(fn,wait){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), wait); } }
-
-  // initial load
-  fetchList();
-
-  // -------------------------
-  // Utility: show full page details
-  // -------------------------
-  async function fetchPageDetails(id){
-    try{
-      const res = await fetch(API_ROOT + '?op=get&id=' + encodeURIComponent(id));
-      if(!res.ok) throw new Error('err');
-      const json = await res.json();
-      return mapNotionPage(json);
-    }catch(e){ console.error(e); return null; }
-  }
-
-  // update selected panel when clicking a row
-  function showSelected(cow){
-    selected.innerHTML = `<div style="margin-top:8px"><strong>${cow.tag}</strong><div class="muted">${cow.type}</div><div style="margin-top:8px">Latest milk: ${cow.latest_milk} L</div><div>Last: ${cow.last_production}</div></div>`;
-  }
-
-  // enhance: clicking a row opens modal and updates selected
-  // we already set row click to show modal; add listener to modal open to update selected
-  const origShowModal = showModal;
-  showModal = function(cow){ origShowModal(cow); showSelected(cow); }
-
-  </script>
-  <script>
-    const addCowBtn = document.getElementById("addCowBtn");
-const addCowModal = document.getElementById("addCowModal");
-const closeModalBtn = document.getElementById("closeModalBtn");
-
-const cameraContainer = document.getElementById("cameraContainer");
-const video = document.getElementById("camera");
-const takePhotoBtn = document.getElementById("takePhotoBtn");
-
-const cowForm = document.getElementById("cowForm");
-const photoPreview = document.getElementById("photoPreview");
-
-let photoBlob = null;
-let stream = null;
-
-// Open Modal & Start Camera
-addCowBtn.addEventListener("click", async () => {
-  addCowModal.classList.remove("hidden");
-  cameraContainer.classList.remove("hidden");
-  cowForm.classList.add("hidden");
-
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    video.srcObject = stream;
-  } catch (err) {
-    alert("Camera access denied.");
-  }
-});
-
-// Take Photo
-takePhotoBtn.addEventListener("click", () => {
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext("2d").drawImage(video, 0, 0);
-  canvas.toBlob(blob => {
-    photoBlob = blob;
-    photoPreview.src = URL.createObjectURL(blob);
-    cameraContainer.classList.add("hidden");
-    cowForm.classList.remove("hidden");
-    stopCamera();
-  }, "image/jpeg");
-});
-
-// Submit Cow Data
-cowForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  if (!photoBlob) {
-    alert("Please take a photo first.");
-    return;
-  }
-
-  // 1. Upload to Cloudinary
-  const formData = new FormData();
-  formData.append("file", photoBlob);
-  formData.append("upload_preset", "cow_upload");
-
-  const cloudinaryRes = await fetch("https://api.cloudinary.com/v1_1/dd8dxlddu/image/upload", {
-    method: "POST",
-    body: formData
-  });
-  const cloudinaryData = await cloudinaryRes.json();
-  const imageUrl = cloudinaryData.secure_url;
-
-  // 2. Send data to Netlify function to store in Notion
-  const cowData = {
-    name: document.getElementById("cowName").value,
-    breed: document.getElementById("cowBreed").value,
-    age: document.getElementById("cowAge").value,
-    photo: imageUrl
-  };
-
-  await fetch("/.netlify/functions/addCow", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(cowData)
+  // click outside to close
+  cowModal?.addEventListener('click', (ev) => {
+    if (ev.target === cowModal) hideModal();
   });
 
-  // Reset for next cow
-  cowForm.reset();
-  photoBlob = null;
-  addCowBtn.click(); // reopen camera for next
-});
+  takePhotoBtn?.addEventListener('click', takePhoto);
+  retakeBtn?.addEventListener('click', retake);
+  cowForm?.addEventListener('submit', handleSubmit);
 
-// Close Modal
-closeModalBtn.addEventListener("click", () => {
-  addCowModal.classList.add("hidden");
-  stopCamera();
-});
+  // Cleanup when page unloads
+  window.addEventListener('beforeunload', stopCamera);
 
-// Stop Camera Stream
-function stopCamera() {
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-    stream = null;
-  }
-}
+})();
 
   </script>
+  
+    
 </body>
 </html>
-
-<!-- 
-========================================
-netlify/functions/notion.js
-========================================
-
-// Netlify Function to proxy requests to Notion API
-// Save this file to: netlify/functions/notion.js
-
-/*
-Environment variables required (set in Netlify site settings):
-- NOTION_TOKEN  (your Notion internal integration token)
-- NOTION_DB_ID  (the database id, e.g. a UUID)
-
-This function supports:
-- GET ?op=list  -> queries the database and returns an array of page objects (raw Notion page objects)
-- GET ?op=get&id=PAGE_ID -> retrieves a page by id
-
-It intentionally returns Notion's page objects (lightweight) so the front-end can map properties.
-*/
-
-const fetch = require('node-fetch');
-
-exports.handler = async function(event, context){
-  const NOTION_TOKEN = process.env.NOTION_TOKEN;
-  const NOTION_DB_ID = process.env.NOTION_DB_ID;
-
-  if(!NOTION_TOKEN || !NOTION_DB_ID){
-    return {
-      statusCode: 500,
-      headers: { 'Content-Type': 'application/json' , 'Access-Control-Allow-Origin':'*', 'Access-Control-Allow-Methods':'GET,OPTIONS'},
-      body: JSON.stringify({ error: 'NOTION_TOKEN and NOTION_DB_ID must be set in environment variables' })
-    };
-  }
-
-  const qs = event.queryStringParameters || {};
-  const op = qs.op || 'list';
-
-  try{
-    if(op === 'list'){
-      // Query the database (no filters) — paginated
-      const url = `https://api.notion.com/v1/databases/${NOTION_DB_ID}/query`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${NOTION_TOKEN}`,
-          'Notion-Version': '2022-06-28',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ page_size: 100 })
-      });
-      if(!res.ok){
-        const text = await res.text();
-        return { statusCode: 502, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: 'Notion API error', details: text }) };
-      }
-      const json = await res.json();
-      // return results array
-      return { statusCode: 200, headers:{ 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' }, body: JSON.stringify(json.results) };
-    }
-    else if(op === 'get'){
-      const id = qs.id;
-      if(!id) return { statusCode:400, headers:{'Access-Control-Allow-Origin':'*'}, body: 'Missing id' };
-      const url = `https://api.notion.com/v1/pages/${id}`;
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${NOTION_TOKEN}`, 'Notion-Version': '2022-06-28' } });
-      if(!res.ok) return { statusCode:502, headers:{'Access-Control-Allow-Origin':'*'}, body: 'Notion error' };
-      const json = await res.json();
-      return { statusCode:200, headers:{ 'Content-Type':'application/json','Access-Control-Allow-Origin':'*' }, body: JSON.stringify(json) };
-    }
-    else{
-      return { statusCode:400, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: 'Unknown op' }) };
-    }
-  }catch(err){
-    console.error('Function error', err);
-    return { statusCode:500, headers:{'Access-Control-Allow-Origin':'*'}, body: JSON.stringify({ error: String(err) }) };
-  }
-};
-
-
-========================================
-END OF FILE
-========================================
- -->
